@@ -3,4 +3,4 @@
 	url = https://github.com/oxcsml/geomstats
 [submodule "haikumodels"]
 	path = haikumodels
-	url = https://github.com/abarcel/haikumodels
+	url = https://github.com/yuyang-shi/haikumodels
