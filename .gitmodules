@@ -1,6 +1,6 @@
 [submodule "geomstats"]
 	path = geomstats
-	url = https://github.com/oxcsml/geomstats
+	url = https://github.com/yuyang-shi/geomstats
 [submodule "haikumodels"]
 	path = haikumodels
 	url = https://github.com/yuyang-shi/haikumodels
