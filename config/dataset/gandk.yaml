@@ -1,0 +1,11 @@
+_target_: score_sde.datasets.conditional.GAndK
+_convert_: partial
+batch_dims:
+  - ${batch_size}
+num_data: 1050000
+num_samples: 10000
+num_quantiles: 8
+basis_degree: 1
+normalize_type: premeanstd
+dim: 4
+name: gandk

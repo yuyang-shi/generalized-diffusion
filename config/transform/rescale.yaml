@@ -1,0 +1,6 @@
+_target_: score_sde.models.Rescale
+orig_scale: [0, 10]
+new_scale: 
+  - ${eval:-${transform.newscale}}
+  - ${transform.newscale}
+newscale: 1

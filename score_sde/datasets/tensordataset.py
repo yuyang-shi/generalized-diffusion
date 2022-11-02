@@ -6,14 +6,20 @@ import numpy as np
 
 
 class TensorDataset:
-    def __init__(self, data):
+    def __init__(self, data, context_data=None):
         self.data = jnp.array(data)
+        self.context = False
+        if context_data is not None:
+            self.context_data = jnp.array(context_data)
+            self.context = True
 
     def __len__(self):
         return self.data.shape[0]
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        if self.context:
+            return self.data[idx], self.context_data[idx]
+        return self.data[idx], None
 
 
 class DataLoader:
@@ -43,8 +49,7 @@ class DataLoader:
 
         indices = jax.random.choice(next_rng, len(self.dataset), shape=(self.batch_dims,))
 
-        return self.dataset[indices], None
-        # return self.data[indices].reshape((self.batch_dims, *self.dataset.shape[1:]))
+        return self.dataset[indices]
 
 
 class DatasetIterator:
@@ -76,7 +81,7 @@ class DatasetIterator:
         else:
             raise StopIteration
 
-        return batch, None
+        return batch
 
 
 # TODO: assumes 1d batch_dims

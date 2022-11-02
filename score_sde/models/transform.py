@@ -1,7 +1,7 @@
 import abc
 import functools
 import operator
-
+import numpy as np
 import jax.numpy as jnp
 
 
@@ -74,3 +74,19 @@ class Id(Transform):
 
     def log_abs_det_jacobian(self, x, y):
         return jnp.zeros((x.shape[0]))
+
+
+class Rescale(Transform):
+    def __init__(self, domain, orig_scale, new_scale, **kwargs):
+        super().__init__(domain, domain)
+        self.orig_scale = orig_scale
+        self.new_scale = new_scale
+
+    def __call__(self, x):
+        return (x - self.new_scale[0]) / (self.new_scale[1] - self.new_scale[0]) * (self.orig_scale[1] - self.orig_scale[0]) + self.orig_scale[0]
+
+    def inv(self, y):
+        return (y - self.orig_scale[0]) / (self.orig_scale[1] - self.orig_scale[0]) * (self.new_scale[1] - self.new_scale[0]) + self.new_scale[0]
+
+    def log_abs_det_jacobian(self, x, y):
+        return jnp.ones((x.shape[0])) * jnp.log((self.orig_scale[1] - self.orig_scale[0]) / (self.new_scale[1] - self.new_scale[0])) * np.prod(x.shape[1:])

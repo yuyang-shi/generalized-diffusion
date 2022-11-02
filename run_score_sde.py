@@ -18,8 +18,7 @@ from score_sde.losses import get_ema_loss_step_fn
 from score_sde.utils import TrainState, save, restore
 from score_sde.utils.loggers_pl import LoggerCollection
 from score_sde.datasets import random_split, DataLoader, TensorDataset
-from riemannian_score_sde.utils.normalization import compute_normalization
-from riemannian_score_sde.utils.vis import plot, plot_ref
+from score_sde.utils.vis import plot, plot_ref
 
 log = logging.getLogger(__name__)
 
@@ -67,9 +66,6 @@ def run(cfg):
                 if cfg.train_plot:
                     generate_plots(train_state, "val", step=step)
                 train_time = timer()
-            
-            if step == cfg.steps - 1:
-                save(ckpt_final_path, train_state)
 
         logger.log_metrics({"train/total_time": total_train_time}, step)
         return train_state, True
@@ -107,13 +103,6 @@ def run(cfg):
         logger.log_metrics({f"{stage}/nfe": nfe}, step)
         log.info(f"{stage}/nfe = {nfe:.1f}")
 
-        if stage == "test":  # Estimate normalisation constant
-            default_context = context[0] if context is not None else None
-            Z = compute_normalization(
-                likelihood_fn, data_manifold, context=default_context
-            )
-            log.info(f"Z = {Z:.2f}")
-            logger.log_metrics({f"{stage}/Z": Z}, step)
 
     def generate_plots(train_state, stage, step=None):
         log.info("Generating plots")
@@ -123,21 +112,21 @@ def run(cfg):
         ## p_0 (backward)
         M = cfg.plot_M
         model_w_dicts = (model, train_state.params_ema, train_state.model_state)
-        sampler_kwargs = dict(N=cfg.sampler_N, eps=cfg.eps, predictor="GRW")
+        sampler_kwargs = dict(N=cfg.sampler_N, eps=cfg.eps)
         sampler = pushforward.get_sampler(model_w_dicts, train=False, **sampler_kwargs)
 
         x0, context = next(dataset)
         shape = (int(x0.shape[0] * M), *transform.inv(x0).shape[1:])
-        # x0 = jnp.repeat(x0, M, 0)
+        x0 = jnp.repeat(x0, M, 0)
         if context is not None:
             context = jnp.repeat(context, M, 0)
         rng, next_rng = jax.random.split(rng)
         x = sampler(next_rng, shape, context)
-        prop_in_M = data_manifold.belongs(x, atol=1e-4).mean()
-        log.info(f"Prop samples in M: {100 * prop_in_M.item()}")
-        plt = plot(data_manifold, [x0], [x], dataset=dataset)
+        plt, metrics_dict = plot([x0], [x], dataset=dataset)
         logger.log_plot(f"{stage}_x0_backw", plt, step if step is not None else cfg.steps)
-        del sampler
+
+        for metrics_dict_k, metrics_dict_v in metrics_dict.items():
+            logger.log_metrics({f"{stage}/{metrics_dict_k}": metrics_dict_v}, step)
 
         ## p_T (forward)
         if isinstance(pushforward, SDEPushForward):
@@ -146,10 +135,12 @@ def run(cfg):
             )
             z = transform.inv(x0)
             zT = sampler(rng, None, context, z=z)
-            plt = plot_ref(model_manifold, transform.inv(zT))
+            plt, metrics_dict = plot_ref(transform.inv(zT))
             if plt is not None:
                 logger.log_plot(f"{stage}_xT", plt, step if step is not None else cfg.steps)
-            del sampler
+            
+            for metrics_dict_k, metrics_dict_v in metrics_dict.items():
+                logger.log_metrics({f"{stage}/{metrics_dict_k}": metrics_dict_v}, step)
 
     ### Main
     log.info("Stage : Startup")
@@ -158,20 +149,16 @@ def run(cfg):
     log.info(f"run_path: {run_path}")
     log.info(f"hostname: {socket.gethostname()}")
     ckpt_path = os.path.join(run_path, cfg.ckpt_dir)
-    ckpt_final_path = os.path.join(run_path, cfg.ckpt_dir + '_final')
-    os.makedirs(ckpt_path, exist_ok=cfg.mode == "test")
-    os.makedirs(ckpt_final_path, exist_ok=cfg.mode == "test")
+    os.makedirs(ckpt_path)
     loggers = [instantiate(logger_cfg) for logger_cfg in cfg.logger.values()]
     logger = LoggerCollection(loggers)
     logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))
 
     log.info("Stage : Instantiate model")
     rng = jax.random.PRNGKey(cfg.seed)
-    data_manifold = instantiate(cfg.manifold)
-    transform = instantiate(cfg.transform, data_manifold)
-    model_manifold = transform.domain
-    flow = instantiate(cfg.flow, manifold=model_manifold)
-    base = instantiate(cfg.base, model_manifold, flow)
+    transform = instantiate(cfg.transform, None)
+    flow = instantiate(cfg.flow)
+    base = instantiate(cfg.base)
     pushforward = instantiate(cfg.pushf, flow, base, transform=transform)
 
     log.info("Stage : Instantiate dataset")
@@ -197,20 +184,12 @@ def run(cfg):
         eval_ds = instantiate(cfg.dataset, rng=next_rng, split="val")
         rng, next_rng = jax.random.split(rng)
         test_ds = instantiate(cfg.dataset, rng=next_rng, split="test")
-        del dataset
 
     log.info("Stage : Instantiate vector field model")
 
     def model(y, t, context=None, is_training=True):
         """Vector field s_\theta: y, t, context -> T_y M"""
-        output_shape = get_class(cfg.generator._target_).output_shape(model_manifold)
-        score = instantiate(
-            cfg.generator,
-            cfg.architecture,
-            cfg.embedding,
-            output_shape,
-            manifold=model_manifold,
-        )
+        score = instantiate(cfg.architecture)
         # TODO: parse context into embedding map
         
         t = jnp.expand_dims(t.reshape(-1), -1)

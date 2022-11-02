@@ -3,3 +3,4 @@ like_w: false
 eps: ${eps}
 thresh: 1.
 n_max: -1
+fast_sampling: false

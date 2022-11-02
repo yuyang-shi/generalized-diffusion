@@ -56,7 +56,7 @@ def get_dsm_loss_fn(
             train=train,
             return_state=True,
         )
-        x_0 = batch["data"]
+        x_0, context = pushforward.transform.inv(batch["data"]), batch["context"]
 
         rng, step_rng = random.split(rng)
         # uniformly sample from SDE timeframe
@@ -66,7 +66,7 @@ def get_dsm_loss_fn(
         mean, std = sde.marginal_prob(x_0, t)
         # reparametrised sample x_t|x_0 = mean + std * z with z ~ N(0,1)
         x_t = mean + batch_mul(std, z)
-        score, new_model_state = score_fn(x_t, t, rng=step_rng)
+        score, new_model_state = score_fn(x_t, t, context, rng=step_rng)
         # grad log p(x_t|x_0) = - 1/std^2 (x_t - mean) = - z / std
 
         if not like_w:

@@ -2,7 +2,7 @@ defaults:
   # GENERAL #
   - _self_
 
-  - server: local
+  - server: arc-short
   - experiment: s2_toy
 
   - logger: all
@@ -39,3 +39,7 @@ train_plot: true
 test_val: true
 test_test: true
 test_plot: true
+
+sampler_N: 100
+eval_num_data: 20000
+plot_M: 32

@@ -1,0 +1,5 @@
+_target_: score_sde.sde.VPSDE
+beta_0: 0.1
+beta_f: 20.
+t0: 0.
+tf: 1.

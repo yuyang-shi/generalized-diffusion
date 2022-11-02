@@ -1,0 +1,28 @@
+# @package _global_
+
+name: symsol
+
+defaults:
+  - /dataset: symsol
+  - /manifold: so3
+  - /architecture: sumvisionpctembed
+  - /embedding: none
+  - /model: rsgm
+  - override /generator: lie_algebra
+
+flow:
+  t0: 0
+  tf: 1
+  beta_0: 0.001
+  beta_f: 6
+
+batch_size: 128  # 64  # 
+eval_batch_size: 1
+warmup_steps: 1000
+steps: 100000
+val_freq: 100000
+ema_rate: 0.999
+eps: 2e-4
+
+eval_num_data: 10
+plot_M: 8

@@ -3,6 +3,6 @@ wandb:
     save_dir: null # /data/localhost/not-backed-up/mhutchin/score-sde/logs #${logs_dir}
     name: ${str:${seed}}
     group: ${name}_${hydra:job.override_dirname}
-    entity: oxcsml
+    entity: yuyshi
     project: diffusion_manifold
     offline: False

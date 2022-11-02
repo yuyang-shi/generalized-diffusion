@@ -59,7 +59,7 @@ def get_sde_drift_from_fn(sde: SDE, model: ParametrisedScoreFunction, params, st
 
 def get_ode_drift_fn(model, params, states):
     def drift_fn(y: jnp.ndarray, t: float, context: jnp.ndarray) -> jnp.ndarray:
-        model_out, _ = model.apply(params, states, None, y=y, t=t, context=context)
+        model_out, _ = model.apply(params, states, None, y=y, t=t, context=context, is_training=False)
         return model_out
 
     return drift_fn
@@ -101,10 +101,10 @@ class PushForward:
         return "PushForward: base:{} flow:{}".format(self.base, self.flow)
 
     def get_log_prob(self, model_w_dicts, train=False, transform=True, **kwargs):
-        def log_prob(x, rng=None):
+        def log_prob(x, context=None, rng=None):
             y = self.transform.inv(x) if transform else x
             flow = self.flow.get_forward(model_w_dicts, train, augmented=True)
-            z, inv_logdets, nfe = flow(y, rng=rng, **kwargs)  # NOTE: flow is not reversed
+            z, inv_logdets, nfe = flow(y, context=context, rng=rng, **kwargs)  # NOTE: flow is not reversed
             log_prob = self.base.log_prob(z).reshape(-1)
             log_prob += inv_logdets
             if transform:
@@ -119,7 +119,7 @@ class PushForward:
         def sample(rng, shape, context, z=None):
             z = self.base.sample(rng, shape) if z is None else z
             flow = self.flow.get_forward(model_w_dicts, train)
-            y, nfe = flow(z, context, reverse=reverse, **kwargs)  # NOTE: flow is reversed
+            y, nfe = flow(z, context=context, reverse=reverse, **kwargs)  # NOTE: flow is reversed
             x = self.transform(y) if transform else y
             return x
 
@@ -141,18 +141,22 @@ class SDEPushForward(PushForward):
         self, model_w_dicts, train=False, reverse=True, transform=True, **kwargs
     ):
         if self.diffeq == "ode":  # via probability flow
+            print("Using probability flow sampling")
             sample = super().get_sampler(model_w_dicts, train, reverse)
         elif self.diffeq == "sde":  # via stochastic process
-
+            print("Using stochastic process sampling")
             def sample(rng, shape, context, z=None):
                 z = self.base.sample(rng, shape) if z is None else z
                 score_fn = get_score_fn(self.sde, *model_w_dicts)
                 score_fn = partial(score_fn, context=context)
                 sde = self.sde.reverse(score_fn) if reverse else self.sde
                 sampler = get_pc_sampler(sde, **kwargs)
-                sampler = jax.jit(sampler)
+                # sampler = jax.jit(sampler)  # TODO: 
                 y = sampler(rng, z)
                 x = self.transform(y) if transform else y
+
+                # sampler._clear_cache()
+                # del sampler
                 return x
 
         else:

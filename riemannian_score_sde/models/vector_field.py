@@ -10,31 +10,11 @@ from geomstats.geometry.hypersphere import Hypersphere
 from geomstats.geometry.base import VectorSpace, EmbeddedManifold
 
 
-def get_exact_div_fn(fi_fn, Xi=None):
-    "flatten all but the last axis and compute the true divergence"
-
-    def div_fn(x: jnp.ndarray, t: float):
-        x_shape = x.shape
-        dim = np.prod(x_shape[1:])
-        t = jnp.expand_dims(t.reshape(-1), axis=-1)
-        x = jnp.expand_dims(x, 1)  # NOTE: need leading batch dim after vmap
-        t = jnp.expand_dims(t, 1)
-        jac = jax.vmap(jax.jacrev(fi_fn, argnums=0))(x, t)
-        jac = jac.reshape([x_shape[0], dim, dim])
-        if Xi is not None:
-            jac = jnp.einsum("...nd,...dm->...nm", jac, Xi)
-        div = jnp.trace(jac, axis1=-1, axis2=-2)
-        return div
-
-    return div_fn
-
-
 class VectorFieldGenerator(hk.Module, abc.ABC):
     def __init__(self, architecture, embedding, output_shape, manifold):
         """X = fi * Xi with fi weights and Xi generators"""
         super().__init__()
         self.net = instantiate(architecture, output_shape=output_shape)
-        self.embedding = instantiate(embedding, manifold=manifold)
         self.manifold = manifold
 
     @staticmethod
@@ -42,9 +22,9 @@ class VectorFieldGenerator(hk.Module, abc.ABC):
     def output_shape(manifold):
         """Cardinality of the generating set."""
 
-    def _weights(self, x, t):
+    def _weights(self, x, t, context=None, is_training=True):
         """shape=[..., card=n]"""
-        return self.net(*self.embedding(x, t))
+        return self.net(x, t, context=context, is_training=is_training)
 
     @abc.abstractmethod
     def _generators(self, x):
@@ -52,11 +32,13 @@ class VectorFieldGenerator(hk.Module, abc.ABC):
 
     @property
     def decomposition(self):
-        return lambda x, t: self._weights(x, t), lambda x: self._generators(x)
+        def weights_fn(x, t, context=None, is_training=True):
+            return self._weights(x, t, context=context, is_training=is_training)
+        return weights_fn, lambda x: self._generators(x)
 
-    def __call__(self, x, t):
+    def __call__(self, x, t, context=None, is_training=True):
         fi_fn, Xi_fn = self.decomposition
-        fi, Xi = fi_fn(x, t), Xi_fn(x)
+        fi, Xi = fi_fn(x, t, context=context, is_training=is_training), Xi_fn(x)
         out = jnp.einsum("...n,...dn->...d", fi, Xi)
         # NOTE: seems that extra projection is required for generator=eigen
         # during the ODE solve cf tests/test_lkelihood.py
@@ -119,9 +101,9 @@ class AmbientGenerator(VectorFieldGenerator):
     def _generators(self, x):
         return self.manifold.eigen_generators(x)
 
-    def __call__(self, x, t):
+    def __call__(self, x, t, context=None, is_training=True):
         # `to_tangent`` have an 1/sq_norm(x) term that wrongs the div
-        return self.manifold.to_tangent(self.net(x, t), x)
+        return self.manifold.to_tangent(self.net(x, t, context=context, is_training=is_training), x)
 
 
 class LieAlgebraGenerator(VectorFieldGenerator):
@@ -135,12 +117,12 @@ class LieAlgebraGenerator(VectorFieldGenerator):
     def _generators(self, x):
         return self.manifold.lie_algebra.basis
 
-    def __call__(self, x, t):
+    def __call__(self, x, t, context=None, is_training=True):
         x = x.reshape((x.shape[0], self.manifold.dim, self.manifold.dim))
         fi_fn, Xi_fn = self.decomposition
         x_input = x.reshape((*x.shape[:-2], -1))
         # x_input = self.manifold.vee(self.manifold.log(x)) #NOTE: extremely unstable
-        fi, Xi = fi_fn(x_input, t), Xi_fn(x)
+        fi, Xi = fi_fn(x_input, t, context=context, is_training=is_training), Xi_fn(x)
         out = jnp.einsum("...i,ijk ->...jk", fi, Xi)
         # is_tangent = self.manifold.lie_algebra.belongs(out, atol=1e-3).all()
         out = self.manifold.compose(x, out)
@@ -164,9 +146,9 @@ class TorusGenerator(VectorFieldGenerator):
             self.rot_mat @ x.reshape((*x.shape[:-1], self.manifold.dim, 2))[..., None]
         )[..., 0]
 
-    def __call__(self, x, t):
+    def __call__(self, x, t, context=None, is_training=True):
         weights_fn, fields_fn = self.decomposition
-        weights = weights_fn(x, t)
+        weights = weights_fn(x, t, context=context, is_training=is_training)
         fields = fields_fn(x)
 
         return (fields * weights[..., None]).reshape(

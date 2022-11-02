@@ -1,3 +1,6 @@
+import os
+os.environ['GEOMSTATS_BACKEND'] = 'jax'
+
 import math
 import importlib
 
@@ -279,7 +282,7 @@ def earth_plot(cfg, log_prob, train_ds, test_ds, N, azimuth=None, samples=None):
     return figs
 
 
-def plot_so3(x0s, xts, size, **kwargs):
+def plot_so3(x0s, xts, size, close=True, **kwargs):
     colors = sns.color_palette("husl", len(x0s))
     # colors = sns.color_palette("tab10")
     fig, axes = plt.subplots(
@@ -293,7 +296,7 @@ def plot_so3(x0s, xts, size, **kwargs):
     )
     # x_labels = [r"$\alpha$", r"$\beta$", r"$\gamma$"]
     x_labels = [r"$\phi$", r"$\theta$", r"$\psi$"]
-    y_labels = ["Target", "Model"]
+    y_labels = ["Ground truth", "Model"]
     # bins = round(math.sqrt(len(w[:, 0])))
     bins = 100
 
@@ -330,7 +333,8 @@ def plot_so3(x0s, xts, size, **kwargs):
                     axes[i, j].set_xlabel(x_labels[j], fontsize=30)
                 axes[i, j].tick_params(axis="both", which="major", labelsize=20)
 
-    plt.close(fig)
+    if close:
+        plt.close(fig)
     return fig
 
 
@@ -437,7 +441,7 @@ def plot_t1(x0s, xts, size, **kwargs):
     return fig
 
 
-def plot_so3_uniform(x, size=10):
+def plot_so3_uniform(x, size=10, close=True):
     colors = sns.color_palette("husl", len(x))
     fig, axes = plt.subplots(
         1,
@@ -479,8 +483,8 @@ def plot_so3_uniform(x, size=10):
         axes[j].plot(grid, y, alpha=0.5, lw=4, color="black", label=r"$p_{ref}$")
         if j == 0:
             axes[j].legend(loc="best", fontsize=20)
-
-    plt.close(fig)
+    if close:
+        plt.close(fig)
     return fig
 
 
@@ -521,6 +525,238 @@ def plot_so3b(prob, lambda_x, N, size=10):
     return fig
 
 
+def plot_so3c(x0s, xts, size, dataset=None, close=True, **kwargs):
+    canonical_rotation=np.eye(3)
+    show_color_wheel = True
+    def _show_single_marker(ax, rotation, marker, edgecolors=True,
+                            facecolors=False):
+        w = _SpecialOrthogonal3Vectors().tait_bryan_angles_from_matrix(rotation, extrinsic_or_intrinsic="intrinsic", order="zyx")
+        xyz = rotation[:, 0]
+        tilt_angle = w[0]
+        longitude = np.arctan2(xyz[0], -xyz[1])
+        latitude = np.arcsin(xyz[2])
+
+        color = cmap(0.5 + tilt_angle / 2 / np.pi)
+        
+        # phi = np.linspace(0, 2.*np.pi, 36)  #36 points
+        # r = np.radians(40)
+        # x = np.radians(35) + r*np.cos(phi)
+        # y = np.radians(30) + r*np.sin(phi)
+        # ax.plot(x, y, color="g")
+
+        # ax.add_patch(plt.Circle((longitude, latitude), 0.3, color=color, linewidth=1, fill=False, alpha=0.2))
+        # ax.scatter(longitude, latitude, s=2500,
+        #            edgecolors=color if edgecolors else 'none',
+        #            facecolors=facecolors if facecolors else 'none',
+        #            marker=marker,
+        #            linewidth=2)
+        ax.scatter(longitude, latitude, s=75,
+                edgecolors='black' if edgecolors else 'none',
+                facecolors=color if facecolors else 'none',
+                marker=marker,
+                linewidth=1)
+
+    fig = plt.figure(figsize=(16, 4), dpi=100)
+    titles = ["Ground truth", "Model"]
+    for k, (x0, xt) in enumerate(zip(x0s, xts)):
+        # xt = xt[:x0.shape[0]]
+        for i, xs in enumerate([x0, xt]):
+            ax = fig.add_subplot(121+i, projection='mollweide') 
+
+            display_rotations = xs @ canonical_rotation
+            cmap = plt.cm.hsv
+            scatterpoint_scaling = 1
+            eulers_queries =_SpecialOrthogonal3Vectors().tait_bryan_angles_from_matrix(display_rotations, extrinsic_or_intrinsic="intrinsic", order="zyx")
+            xyz = display_rotations[:, :, 0]
+            tilt_angles = eulers_queries[:, 0]
+
+            longitudes = np.arctan2(xyz[:, 0], -xyz[:, 1])
+            latitudes = np.arcsin(xyz[:, 2])
+
+            which_to_display = np.full(longitudes.shape, True)
+
+            # Display the distribution
+            ax.scatter(
+                longitudes[which_to_display],
+                latitudes[which_to_display],
+                s=scatterpoint_scaling,
+                c=cmap(0.5 + tilt_angles[which_to_display] / 2. / np.pi))
+
+            if dataset is not None and hasattr(dataset, 'mean'):
+                # The visualization is more comprehensible if the GT
+                # rotation markers are behind the output with white filling the interior.
+                display_rotations_gt = dataset.mean @ canonical_rotation
+            else:
+                display_rotations_gt = x0 @ canonical_rotation
+
+            for rotation in display_rotations_gt:
+                _show_single_marker(ax, rotation, '*', facecolors=True)
+            # Cover up the centers with white markers
+            # for rotation in display_rotations_gt:
+            #     _show_single_marker(ax, rotation, 'o', edgecolors=False,
+            #                         facecolors='#ffffff')
+            
+            ax.grid()
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.set_title(titles[i])
+
+        if show_color_wheel:
+            # Add a color wheel showing the tilt angle to color conversion.
+            ax = fig.add_axes([0.86, 0.17, 0.12, 0.12], projection='polar')
+            theta = np.linspace(-3 * np.pi / 2, np.pi / 2, 200)
+            radii = np.linspace(0.4, 0.5, 2)
+            _, theta_grid = np.meshgrid(radii, theta)
+            colormap_val = 0.5 + theta_grid / np.pi / 2.
+            ax.pcolormesh(theta, radii, colormap_val.T, cmap=cmap)
+            ax.set_yticklabels([])
+            ax.set_xticklabels([r'90$\degree$', None,
+                                r'180$\degree$', None,
+                                r'270$\degree$', None,
+                                r'0$\degree$'], fontsize=14)
+            ax.spines['polar'].set_visible(False)
+            plt.text(0.5, 0.5, 'Tilt', fontsize=14,
+                    horizontalalignment='center',
+                    verticalalignment='center', transform=ax.transAxes)
+
+    if close:
+        plt.close(fig)
+    return fig
+
+
+def plot_so3d(x0s, xts, size, dataset=None, close=True, **kwargs):
+    from packaging.version import parse as parse_version
+    import matplotlib
+    from mpl_toolkits.mplot3d import Axes3D
+    from matplotlib.patches import FancyArrowPatch
+    from mpl_toolkits.mplot3d import proj3d
+    from matplotlib import gridspec
+
+    # Define a custom _axes3D function based on the matplotlib version.
+    # The auto_add_to_figure keyword is new for matplotlib>=3.4.
+    if parse_version(matplotlib.__version__) >= parse_version('3.4'):
+        def _axes3D(fig, *args, **kwargs):
+            ax = Axes3D(fig, *args, auto_add_to_figure=False, **kwargs)
+            return fig.add_axes(ax)
+    else:
+        def _axes3D(*args, **kwargs):
+            return Axes3D(*args, **kwargs)
+
+    class Arrow3D(FancyArrowPatch):
+        def __init__(self, x, y, z, dx, dy, dz, *args, **kwargs):
+            FancyArrowPatch.__init__(self, (0, 0), (0, 0), *args, **kwargs)
+            self._xyz = (x, y, z)
+            self._dxdydz = (dx, dy, dz)
+
+        def draw(self, renderer):
+            x1, y1, z1 = self._xyz
+            dx, dy, dz = self._dxdydz
+            x2, y2, z2 = (x1 + dx, y1 + dy, z1 + dz)
+
+            xs, ys, zs = proj3d.proj_transform((x1, x2), (y1, y2), (z1, z2), self.axes.M)
+
+            self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
+            FancyArrowPatch.draw(self, renderer)
+
+        def do_3d_projection(self, renderer=None):
+            x1, y1, z1 = self._xyz
+            dx, dy, dz = self._dxdydz
+            x2, y2, z2 = (x1 + dx, y1 + dy, z1 + dz)
+
+            xs, ys, zs = proj3d.proj_transform((x1, x2), (y1, y2), (z1, z2), self.axes.M)
+            self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
+            return np.min(zs)
+
+    nrow = 2
+    ncol = 3
+    fig = plt.figure(figsize=(1.5*size, size))
+    subfigs = fig.subfigures(nrows=nrow, ncols=1)
+    titles = ["Ground truth", "Model"]
+
+    coords_axes = np.eye(3)
+    coords_axes_labels = ['x', 'y', 'z']
+
+    for k, (x0, xt) in enumerate(zip(x0s, xts)):
+        # xt = xt[:x0.shape[0]]
+        for i, xs in enumerate([x0, xt]):
+            gs = gridspec.GridSpec(1, ncol, wspace=0.0, hspace=0.0) 
+            subfig = subfigs[i]
+            subfig.suptitle(titles[i], fontsize=20)
+
+            for j in range(3):
+                ax = subfig.add_subplot(gs[0, j], projection='3d')
+
+                # back half of sphere
+                u = np.linspace(0, np.pi, 100)
+                v = np.linspace(0, np.pi, 100)
+                x = np.outer(np.cos(u), np.sin(v))
+                y = np.outer(np.sin(u), np.sin(v))
+                z = np.outer(np.ones(np.size(u)), np.cos(v))
+                ax.plot_surface(x, y, z, color='linen', linewidth=0, alpha=0.2, rstride=2, cstride=2)
+
+                # wireframe
+                # ax.plot_wireframe(x, y, z, rstride=20, cstride=10, color='gray', alpha=0.2)
+                # equator
+                # ax.plot(1.0 * np.cos(u), 1.0 * np.sin(u), zs=0, zdir='z', lw=1, color='gray')
+                # ax.plot(1.0 * np.cos(u), 1.0 * np.sin(u), zs=0, zdir='x', lw=1, color='gray')
+                
+                # front half of sphere
+                u = np.linspace(-np.pi, 0, 100)
+                v = np.linspace(0, np.pi, 100)
+                x = np.outer(np.cos(u), np.sin(v))
+                y = np.outer(np.sin(u), np.sin(v))
+                z = np.outer(np.ones(np.size(u)), np.cos(v))
+                ax.plot_surface(x, y, z, color='linen', linewidth=0, alpha=0.2, rstride=2, cstride=2)
+
+                # wireframe
+                # ax.plot_wireframe(x, y, z, rstride=20, cstride=10, color='gray', alpha=0.2)
+                # equator
+                # ax.plot(1.0 * np.cos(u), 1.0 * np.sin(u), zs=0, zdir='z', lw=1, color='gray')
+                # ax.plot(1.0 * np.cos(u), 1.0 * np.sin(u), zs=0, zdir='x', lw=1, color='gray')
+
+                # # plot circular curves over the surface
+                # theta = np.linspace(0, 2 * np.pi, 100)
+                # z = np.zeros(100)
+                # x = np.sin(theta)
+                # y = np.cos(theta)
+
+                # ax.plot(x, y, z, color='black', alpha=0.4)
+                # ax.plot(z, x, y, color='black', alpha=0.4)
+
+                ## add axis lines
+                zeros = np.zeros(100)
+                line = np.linspace(-1,1,100)
+
+                ax.plot(line, zeros, zeros, color='black', alpha=0.4)
+                ax.plot(zeros, line, zeros, color='black', alpha=0.4)
+                ax.plot(zeros, zeros, line, color='black', alpha=0.4)
+                ax.set_box_aspect((1, 1, 1))
+
+                
+                coords_axis = coords_axes[j]
+                a = Arrow3D(0, 0, 0, coords_axis[0]*1.05, coords_axis[1]*1.05, coords_axis[2]*1.05,
+                            mutation_scale=20,
+                            lw=3,
+                            arrowstyle='-|>',
+                            color=f"C{j}", alpha=1)
+
+                ax.add_artist(a)
+
+                ax.text(coords_axis[0] * 1.25, coords_axis[1] * 1.25, coords_axis[2] * 1.25, coords_axes_labels[j], 
+                        fontsize=16, color=f"C{j}", horizontalalignment='center', verticalalignment='center')
+                
+
+                plt.axis('off')
+                plt.tight_layout()
+
+                xsv = xs @ coords_axis
+                ax.scatter(xsv[:, 0], xsv[:, 1], xsv[:, 2], color=f"C{j}", s=1)
+
+    if close:
+        plt.close(fig)
+    return fig
+
+
 def plot_normal(x, dim, size=10):
     colors = sns.color_palette("husl", len(x))
     fig, axes = plt.subplots(
@@ -556,13 +792,16 @@ def plot_normal(x, dim, size=10):
     return fig
 
 
-def plot(manifold, x0, xt, prob=None, size=10):
+def plot(manifold, x0, xt, dataset=None, prob=None, size=10, close=True):
     if isinstance(manifold, Euclidean) and manifold.dim == 3:
         fig = plot_3d(x0, xt, size, prob=prob)
     elif isinstance(manifold, Hypersphere) and manifold.dim == 2:
         fig = plot_3d(x0, xt, size, prob=prob)
     elif isinstance(manifold, _SpecialOrthogonalMatrices) and manifold.dim == 3:
-        fig = plot_so3(x0, xt, size, prob=prob)
+        fig1 = plot_so3(x0, xt, size, dataset=dataset, prob=prob, close=close)
+        fig2 = plot_so3c(x0, xt, size, dataset=dataset, prob=prob, close=close)
+        fig3 = plot_so3d(x0, xt, size, dataset=dataset, prob=prob, close=close)
+        return [fig1, fig2, fig3]
     elif (
         isinstance(manifold, ProductSameManifold)
         and isinstance(manifold.manifold, Hypersphere)
@@ -582,14 +821,46 @@ def plot(manifold, x0, xt, prob=None, size=10):
     return fig
 
 
-def plot_ref(manifold, xt, size=10):
+def plot_ref(manifold, xt, size=10, close=True):
     if isinstance(manifold, Euclidean):
         fig = plot_normal(xt, manifold.dim, size)
     elif isinstance(manifold, Hypersphere) and manifold.dim == 2:
         fig = None
     elif isinstance(manifold, _SpecialOrthogonalMatrices) and manifold.dim == 3:
-        fig = plot_so3_uniform(xt, size)
+        fig = plot_so3_uniform(xt, size, close=close)
     else:
         print("Only plotting over R^3, S^2 and SO(3) is implemented.")
         return None
     return fig
+
+
+if __name__ == "__main__":
+    from riemannian_score_sde.datasets import Wrapped
+    import jax
+    import jax.numpy as jnp
+
+    SO3 = _SpecialOrthogonalMatrices(3)
+    # dataset = Wrapped(100, "random", 16, [500], SO3, 42, False, 'unif')
+    # x0s, context = next(dataset)
+    rng = jax.random.PRNGKey(1)
+
+    # # rng, next_rng = jax.random.split(rng)
+    # # x0s = SO3.random_uniform(state=next_rng, n_samples=5)
+    rng, next_rng = jax.random.split(rng)
+    # xts = SO3.random_uniform(state=next_rng, n_samples=5)
+
+    # fig = plot_so3d(x0s, xts, 10, dataset=dataset)
+    # fig.savefig("test.png")
+
+
+    samples = SO3.random_uniform(state=next_rng)
+    theta_y = -jnp.arcsin(samples[:, 2, 0])  # -latitudes
+    sign_cos_theta_y = jnp.sign(jnp.cos(theta_y))
+    print(sign_cos_theta_y)
+    theta_z = jnp.arctan2(samples[:, 1, 0] * sign_cos_theta_y, samples[:, 0, 0] * sign_cos_theta_y)  # longitudes
+    theta_x = jnp.arctan2(samples[:, 2, 1] * sign_cos_theta_y, samples[:, 2, 2] * sign_cos_theta_y)
+    # theta_z = jnp.arctan(samples[:, 0, 0] / samples[:, 1, 0])
+    # theta_x = jnp.arctan(samples[:, 2, 2] / samples[:, 2, 1])
+    print(jnp.stack((theta_x, theta_y, theta_z), axis=-1))
+
+    print(_SpecialOrthogonal3Vectors().tait_bryan_angles_from_matrix(samples, extrinsic_or_intrinsic="intrinsic", order="zyx"))

@@ -40,9 +40,12 @@ class Brownian(SDE):
         std = jnp.sqrt(1 - jnp.exp(2.0 * log_mean_coeff))
         return jnp.zeros_like(x), std
 
-    def marginal_sample(self, rng, x, t, return_hist=False):
-        out = self.manifold.random_walk(rng, x, self.rescale_t(t))
-        if return_hist or out is None:
+    def marginal_sample(self, rng, x, t, return_hist=False, fast_sampling=True):
+        if return_hist or (not fast_sampling):
+            out = None
+        else:
+            out = self.manifold.random_walk(rng, x, self.rescale_t(t))
+        if out is None:
             sampler = get_pc_sampler(
                 self,
                 self.N,

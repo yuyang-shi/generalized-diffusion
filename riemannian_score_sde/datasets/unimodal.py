@@ -127,6 +127,19 @@ class Wrapped:
             return samples, jnp.expand_dims(k, -1)
         else:
             return (samples, None)
+    
+    def simulate(self, k):
+        n_samples = k.shape[0]
+        rng, next_rng = jax.random.split(self.rng)
+        self.rng = rng
+        mean = self.mean[k]
+        scale = 1 / jnp.sqrt(self.precision[k])
+        tangent_vec = self.manifold.random_normal_tangent(
+            state=next_rng, base_point=mean, n_samples=n_samples
+        )[1]
+        tangent_vec = scale * tangent_vec
+        samples = self.manifold.exp(tangent_vec, mean)
+        return samples
 
     def log_prob(self, samples):
         def single_log_prob(samples, mean, precision):

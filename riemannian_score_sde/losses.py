@@ -20,6 +20,7 @@ def get_dsm_loss_fn(
     like_w: bool = True,
     eps: float = 1e-3,
     s_zero=True,
+    fast_sampling=True, 
     **kwargs
 ):
     sde = pushforward.sde
@@ -45,7 +46,7 @@ def get_dsm_loss_fn(
         # sample p(y_t | y_0)
         # compute $\nabla \log p(y_t | y_0)$
         if s_zero:  # l_{t|0}
-            y_t = sde.marginal_sample(step_rng, y_0, t)
+            y_t = sde.marginal_sample(step_rng, y_0, t, fast_sampling=fast_sampling)
             if "n_max" in kwargs and kwargs["n_max"] <= -1:
                 get_logp_grad = lambda y_0, y_t, t: sde.varhadan_exp(
                     y_0, y_t, jnp.zeros_like(t), t
@@ -91,6 +92,7 @@ def get_ism_loss_fn(
     like_w: bool = True,
     hutchinson_type="Rademacher",
     eps: float = 1e-3,
+    fast_sampling=True
 ):
     sde = pushforward.sde
 
@@ -111,7 +113,7 @@ def get_ism_loss_fn(
         t = random.uniform(step_rng, (y_0.shape[0],), minval=sde.t0 + eps, maxval=sde.tf)
 
         rng, step_rng = random.split(rng)
-        y_t = sde.marginal_sample(step_rng, y_0, t)
+        y_t = sde.marginal_sample(step_rng, y_0, t, fast_sampling=fast_sampling)
         score, new_model_state = score_fn(y_t, t, context, rng=step_rng)
         score = score.reshape(y_t.shape)
 

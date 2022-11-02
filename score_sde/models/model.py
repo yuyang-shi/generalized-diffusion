@@ -51,7 +51,7 @@ def get_score_fn(
         # t_emb = t * 999 if isinstance(sde, (VPSDE, subVPSDE)) else t
         t_emb = t
         model_out, new_state = model.apply(
-            params, state, rng, y=y, t=t_emb, context=context
+            params, state, rng, y=y, t=t_emb, context=context, is_training=train
         )
         score = model_out
         if std_trick:
