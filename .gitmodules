@@ -4,3 +4,6 @@
 [submodule "haikumodels"]
 	path = haikumodels
 	url = https://github.com/yuyang-shi/haikumodels
+[submodule "discrete_ctmc"]
+	path = discrete_ctmc
+	url = https://github.com/yuyang-shi/tauLDR
