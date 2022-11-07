@@ -43,6 +43,7 @@ def run(cfg):
         total_train_time = 0
         for step in t:
             data, context = next(train_ds)
+            data = jnp.repeat(data, cfg.num_repeat_data, 0)
             batch = {"data": data, "context": context}
             rng, next_rng = jax.random.split(rng)
             (rng, train_state), loss = train_step_fn((next_rng, train_state), batch)
@@ -215,9 +216,9 @@ def run(cfg):
         
         t = jnp.expand_dims(t.reshape(-1), -1)
         if context is not None:
-            if context.shape[0] != y.shape[0]:
-                raise ValueError
-                # context = jnp.repeat(jnp.expand_dims(context, 0), y.shape[0], 0)
+            # if context.shape[0] != y.shape[0]:
+            #     raise ValueError
+            #     context = jnp.repeat(jnp.expand_dims(context, 0), y.shape[0], 0)
             return score(y, t, context=context, is_training=is_training)
         else:
             return score(y, t, is_training=is_training)
@@ -225,8 +226,9 @@ def run(cfg):
     model = hk.transform_with_state(model)
 
     rng, next_rng = jax.random.split(rng)
-    t = jnp.zeros((cfg.batch_size, 1))
+    t = jnp.zeros((cfg.batch_size * cfg.num_repeat_data, 1))
     data, context = next(train_ds)
+    data = jnp.repeat(data, cfg.num_repeat_data, 0)
     params, state = model.init(rng=next_rng, y=transform.inv(data), t=t, context=context)
 
     log.info("Stage : Instantiate optimiser")

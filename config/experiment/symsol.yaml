@@ -14,7 +14,7 @@ flow:
   t0: 0
   tf: 1
   beta_0: 0.001
-  beta_f: 6
+  beta_f: 10
 
 batch_size: 128  # 64  # 
 eval_batch_size: 1
@@ -26,3 +26,4 @@ eps: 2e-4
 
 eval_num_data: 10
 plot_M: 8
+num_repeat_data: 16

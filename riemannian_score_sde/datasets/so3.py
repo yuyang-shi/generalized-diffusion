@@ -38,10 +38,9 @@ class SYMSOLDataset:
         dataset = dataset.map(
             lambda example: (example[annotation_key], tf.image.convert_image_dtype(example['image'], tf.float32)),  # tf.transpose(, (2, 0, 1))
             num_parallel_calls=tf.data.AUTOTUNE)
-        # mean = tf.constant([103.939, 116.779, 123.68])
-        # dataset = dataset.map(
-        #     lambda example: (example[annotation_key], tf.cast(example['image'], tf.float32)[..., ::-1] - mean),  # tf.transpose(, (2, 0, 1))
-        #     num_parallel_calls=tf.data.AUTOTUNE)
+
+        print("Batch size:", self.batch_dims[0])
+
         if split == 'train':
             dataset = dataset.repeat().shuffle(1000).batch(self.batch_dims[0]).prefetch(tf.data.AUTOTUNE)
         else:
@@ -55,10 +54,6 @@ class SYMSOLDataset:
 
     def __next__(self):
         rots, im = next(self.dataset_iterator)
-        # im = jnp.float32(im) / 255
-        # print(rots)
-        # print(im)
-        # return rots, jnp.reshape(rots, (rots.shape[0], -1))
         if self.split == "train":
             return rots, im
         else:
@@ -72,5 +67,3 @@ class SYMSOLDataset:
                 return rots, jnp.broadcast_to(im, [rots.shape[0], *im.shape])
             else:
                 return rots, jnp.broadcast_to(im, [rots.shape[0], *im.shape])
-
-.zeros((1, 224, 224, 3)), is_training=True)

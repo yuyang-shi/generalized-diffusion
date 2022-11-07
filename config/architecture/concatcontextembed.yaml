@@ -1,0 +1,5 @@
+_target_: score_sde.models.ConcatContextEmbed
+enc_shapes: [512, 512, 512]
+dec_shapes: [512, 512, 512]
+c_dim: 128
+act: tanh

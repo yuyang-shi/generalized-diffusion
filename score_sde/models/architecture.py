@@ -8,6 +8,7 @@ import jax.numpy as jnp
 
 import haikumodels as hm
 from .mlp import MLP
+from .layers import get_activation
 
 
 @dataclass
@@ -43,68 +44,40 @@ class ConcatTimeEmbed(hk.Module):
         return self.net(jnp.concatenate([xemb, temb], axis=-1))
 
 
-# @dataclass
-# class ConcatContextEmbed(hk.Module):
-#     def __init__(self, output_shape, enc_shapes, c_dim, dec_shapes, act):
-#         super().__init__()
-#         self.net = MLP(hidden_shapes=dec_shapes, output_shape=output_shape, act=act)
-#         self.c_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
-# 
-#     def __call__(self, x, t, context, is_training=True):
-#         cemb = self.c_encoder(context)
-#         h = jnp.concatenate([x, t, cemb], axis=-1)
-#         out = self.net(h)
-#         return out
-
-
 @dataclass
 class ConcatContextEmbed(hk.Module):
     def __init__(self, output_shape, enc_shapes, c_dim, dec_shapes, act):
         super().__init__()
-        self.x_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
         self.c_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
+        self.x_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
         self.net = MLP(hidden_shapes=dec_shapes, output_shape=output_shape, act=act)
 
     def __call__(self, x, t, context, is_training=True):
         assert len(x.shape) == 2
-        xemb = self.x_encoder(x)
         cemb = self.c_encoder(context)
-        return self.net(jnp.concatenate([xemb, t, cemb], axis=-1))
-
-
-@dataclass
-class ConcatVisionContextEmbed(hk.Module):
-    def __init__(self, output_shape, enc_shapes, c_dim, dec_shapes, act):
-        super().__init__()
-        self._vision_model = hm.ResNet50V2(include_top=False, weights="imagenet", pooling="avg")
-        self.c_encoder = MLP(hidden_shapes=[], output_shape=c_dim, act="")
-        self.x_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
-        self.net = MLP(hidden_shapes=dec_shapes, output_shape=output_shape, act=act)
-
-    def __call__(self, x, t, context, is_training=True):
-        assert len(context.shape) == 4
         xemb = self.x_encoder(x)
-        cemb = self._vision_model(context, is_training=is_training)
-        cemb = self.c_encoder(cemb)
         return self.net(jnp.concatenate([xemb, t, cemb], axis=-1))
 
 
 @dataclass
 class SumVisionPositionContextTimeEmbed(hk.Module):
-    def __init__(self, output_shape, enc_shapes, c_dim, dec_shapes, act):
+    def __init__(self, output_shape, enc_shapes, xemb_dim, c_dim, dec_shapes, act):
         super().__init__()
+        self.xemb_dim = xemb_dim
+        self.c_dim = c_dim
         self.temb_dim = c_dim // 2
         self._vision_model = hm.ResNet50V2(include_top=False, weights="imagenet", pooling="avg")
         self.x_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
         self.t_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
         self.c_encoder = MLP(hidden_shapes=[], output_shape=c_dim, act="")
         self.net = MLP(hidden_shapes=dec_shapes, output_shape=output_shape, act=act)
+        self.act = act
 
     def __call__(self, x, t, context, is_training=True):
         assert len(x.shape) == 2
         assert len(context.shape) == 4
 
-        xemb = get_positional_encoding(x, 6)
+        xemb = get_positional_encoding(x, self.xemb_dim)
         xemb = self.x_encoder(xemb)
 
         temb = get_timestep_embedding(t, self.temb_dim)
@@ -112,31 +85,13 @@ class SumVisionPositionContextTimeEmbed(hk.Module):
 
         cemb = self._vision_model(context, is_training=is_training)
         cemb = self.c_encoder(cemb)
-        return self.net(xemb + temb + cemb)
 
+        xemb = xemb.reshape(cemb.shape[0], -1, self.c_dim)
+        temb = temb.reshape(cemb.shape[0], -1, self.c_dim)
+        cemb = jnp.expand_dims(cemb, 1)
 
-# @dataclass
-# class ConcatVisionContextTimeEmbed(hk.Module):
-#     def __init__(self, output_shape, enc_shapes, c_dim, dec_shapes, act):
-#         super().__init__()
-#         self.temb_dim = c_dim // 2
-#         self._vision_model = hm.ResNet50V2(include_top=False, weights="imagenet", pooling="avg")
-#         # self._vision_model = hk.nets.ResNet18(1000, resnet_v2=True)
-#         self.c_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act="tanh")
-#         self.x_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act=act)
-#         self.t_encoder = MLP(hidden_shapes=enc_shapes, output_shape=c_dim, act="tanh")
-#         self.net = MLP(hidden_shapes=dec_shapes, output_shape=output_shape, act=act)
-
-#     def __call__(self, x, t, context, is_training=True):
-#         if len(context.shape) != 4:
-#             raise NotImplementedError
-#         cemb = self._vision_model(context, is_training=is_training)
-#         cemb = self.c_encoder(cemb)
-#         xemb = self.x_encoder(x)
-#         t = jnp.array(t, dtype=float).reshape(-1, 1)
-#         temb = get_timestep_embedding(t, self.temb_dim)
-#         temb = self.t_encoder(temb)
-#         return self.net(jnp.concatenate([xemb, temb, cemb], axis=-1))
+        xtcemb = get_activation(self.act)(xemb + temb + cemb).reshape(x.shape[0], self.c_dim)
+        return self.net(xtcemb)  # TODO: Check this for other models! 
 
 
 def get_timestep_embedding(timesteps, embedding_dim=128):

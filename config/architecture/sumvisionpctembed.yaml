@@ -1,5 +1,6 @@
 _target_: score_sde.models.SumVisionPositionContextTimeEmbed
 enc_shapes: []
+xemb_dim: 8
 c_dim: 256
 dec_shapes: [256,256,256]
-act: swish
+act: sin

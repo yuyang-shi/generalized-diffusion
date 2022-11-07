@@ -66,6 +66,9 @@ def run(cfg):
                 if cfg.train_plot:
                     generate_plots(train_state, "val", step=step)
                 train_time = timer()
+            
+            if step == cfg.steps - 1:
+                save(ckpt_final_path, train_state)
 
         logger.log_metrics({"train/total_time": total_train_time}, step)
         return train_state, True
@@ -149,7 +152,9 @@ def run(cfg):
     log.info(f"run_path: {run_path}")
     log.info(f"hostname: {socket.gethostname()}")
     ckpt_path = os.path.join(run_path, cfg.ckpt_dir)
-    os.makedirs(ckpt_path)
+    ckpt_final_path = os.path.join(run_path, cfg.ckpt_dir + '_final')
+    os.makedirs(ckpt_path, exist_ok=cfg.mode == "test")
+    os.makedirs(ckpt_final_path, exist_ok=cfg.mode == "test")
     loggers = [instantiate(logger_cfg) for logger_cfg in cfg.logger.values()]
     logger = LoggerCollection(loggers)
     logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))

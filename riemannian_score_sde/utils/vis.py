@@ -750,7 +750,11 @@ def plot_so3d(x0s, xts, size, dataset=None, close=True, **kwargs):
                 plt.tight_layout()
 
                 xsv = xs @ coords_axis
-                ax.scatter(xsv[:, 0], xsv[:, 1], xsv[:, 2], color=f"C{j}", s=1)
+
+                if i == 0:
+                    ax.scatter(xsv[:, 0], xsv[:, 1], xsv[:, 2], color=f"C{j}", s=8)
+                else:
+                    ax.scatter(xsv[:, 0], xsv[:, 1], xsv[:, 2], color=f"C{j}", s=1)
 
     if close:
         plt.close(fig)
