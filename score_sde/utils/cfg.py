@@ -20,6 +20,7 @@ OmegaConf.register_new_resolver("int", lambda x: int(x), replace=True)
 OmegaConf.register_new_resolver("eval", lambda x: eval(x), replace=True)
 OmegaConf.register_new_resolver("str", lambda x: str(x), replace=True)
 OmegaConf.register_new_resolver("prod", lambda x: np.prod(x), replace=True)
+OmegaConf.register_new_resolver("log", lambda x: np.log(x), replace=True)
 OmegaConf.register_new_resolver(
     "where", lambda condition, x, y: x if condition else y, replace=True
 )

@@ -108,7 +108,7 @@ class EulerMaruyamaPredictor(Predictor):
         if len(diffusion.shape) > 1 and diffusion.shape[-1] == diffusion.shape[-2]:
             # if square matrix diffusion coeffs
             diffusion_term = jnp.einsum(
-                "...ij,j,...->...i", diffusion, z, jnp.sqrt(jnp.abs(dt))
+                "...ij,...j,...->...i", diffusion, z, jnp.sqrt(jnp.abs(dt))
             )
         else:
             # if scalar diffusion coeffs (i.e. no extra dims on the diffusion)
@@ -117,6 +117,39 @@ class EulerMaruyamaPredictor(Predictor):
             )
 
         x = x_mean + diffusion_term
+        return x, x_mean
+
+
+@register_predictor
+class EulerMaruyamaSimplexPredictor(Predictor):
+    def __init__(self, sde):
+        super().__init__(sde)
+
+    def update_fn(
+        self, rng: jax.random.KeyArray, x: jnp.ndarray, t: float, dt: float
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        shape = x.shape
+        z = jax.random.normal(rng, shape)
+        drift, diffusion = self.sde.coefficients(x, t)
+        x_mean = x + drift * dt[..., None]
+
+        if len(diffusion.shape) > 1 and diffusion.shape[-1] == diffusion.shape[-2]:
+            # if square matrix diffusion coeffs
+            diffusion_term = jnp.einsum(
+                "...ij,...j,...->...i", diffusion, z, jnp.sqrt(jnp.abs(dt))
+            )
+        else:
+            # if scalar diffusion coeffs (i.e. no extra dims on the diffusion)
+            diffusion_term = jnp.einsum(
+                "...,...i,...->...i", diffusion, z, jnp.sqrt(jnp.abs(dt))
+            )
+
+        x = x_mean + diffusion_term
+        # Project x onto the simplex
+        x = jnp.clip(x, self.sde.eps, 1-self.sde.eps)
+        x = x / jnp.sum(x, -1, keepdims=True)
+        x_mean = jnp.clip(x_mean, self.sde.eps, 1-self.sde.eps)
+        x_mean = x_mean / jnp.sum(x_mean, -1, keepdims=True)
         return x, x_mean
 
 
@@ -212,7 +245,7 @@ def get_pc_sampler(
         else:
             t0 = t0 + eps
 
-        timesteps = jnp.linspace(start=t0, stop=tf, num=N, endpoint=True)
+        timesteps = jnp.linspace(start=t0, stop=tf, num=N+1, endpoint=True)
         dt = (tf - t0) / N
 
         def loop_body(i, val):

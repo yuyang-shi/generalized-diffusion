@@ -2,6 +2,7 @@ import abc
 import functools
 import operator
 import numpy as np
+import jax
 import jax.numpy as jnp
 
 
@@ -90,3 +91,20 @@ class Rescale(Transform):
 
     def log_abs_det_jacobian(self, x, y):
         return jnp.ones((x.shape[0])) * jnp.log((self.orig_scale[1] - self.orig_scale[0]) / (self.new_scale[1] - self.new_scale[0])) * np.prod(x.shape[1:])
+
+
+class Softmax(Transform):
+    def __init__(self, domain, bias=0., eps=1e-5, **kwargs):
+        super().__init__(domain, domain)
+        self.bias = bias
+        self.eps = eps
+        print(self.bias)
+
+    def __call__(self, x):
+        return jax.nn.softmax(x)
+
+    def inv(self, y):
+        return jnp.log(jnp.clip(y, self.eps)) + self.bias
+
+    def log_abs_det_jacobian(self, x, y):
+        raise NotImplementedError

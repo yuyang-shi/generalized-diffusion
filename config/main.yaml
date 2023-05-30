@@ -38,9 +38,12 @@ train_plot: true
 # perform certain metrics in test mode
 test_val: true
 test_test: true
+test_ode: true
 test_plot: true
 
 sampler_N: 100
 eval_num_data: 20000
 plot_M: 32
 num_repeat_data: 1
+
+jax_enable_x64: false

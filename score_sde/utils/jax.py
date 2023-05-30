@@ -33,7 +33,18 @@ def get_estimate_div_fn(fn: ScoreFunction):
 def get_exact_div_fn(fn):
     "flatten all but the last axis and compute the true divergence"
 
+    jac_fn = get_exact_jac_fn(fn)
     def div_fn(y: jnp.ndarray, t: float, context: jnp.ndarray):
+        jac = jac_fn(y, t, context)
+        return jnp.trace(jac, axis1=-1, axis2=-2)
+
+    return div_fn
+
+
+def get_exact_jac_fn(fn):
+    "flatten all but the last axis and compute the true jacobian"
+
+    def jac_fn(y: jnp.ndarray, t: float, context: jnp.ndarray):
         y_shape = y.shape
         dim = np.prod(y_shape[1:])
         t = jnp.expand_dims(t.reshape(-1), axis=-1)
@@ -44,9 +55,9 @@ def get_exact_div_fn(fn):
         jac = jax.vmap(jax.jacrev(fn, argnums=0))(y, t, context)
 
         jac = jac.reshape([y_shape[0], dim, dim])
-        return jnp.trace(jac, axis1=-1, axis2=-2)
+        return jac
 
-    return div_fn
+    return jac_fn
 
 
 def to_flattened_numpy(x: jnp.ndarray) -> np.ndarray:

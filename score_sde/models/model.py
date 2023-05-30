@@ -33,6 +33,7 @@ def get_score_fn(
     state,
     train=False,
     return_state=False,
+    std_trick=True
 ):
     """Wraps `score_fn` so that the model output corresponds to a real time-dependent score function.
     Args:
@@ -46,7 +47,7 @@ def get_score_fn(
       A score function.
     """
 
-    def score_fn(y, t, context, std_trick=True, rng=None):
+    def score_fn(y, t, context, rng=None):
         # NOTE: Time scaling from song's code, to remove?
         # t_emb = t * 999 if isinstance(sde, (VPSDE, subVPSDE)) else t
         t_emb = t

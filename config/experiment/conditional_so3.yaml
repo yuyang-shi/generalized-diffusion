@@ -8,7 +8,7 @@ defaults:
   - /architecture: concat
   - /embedding: none
   - /model: rsgm
-  # - override /generator: lie_algebra
+  - override /generator: lie_algebra
 
 data_dir: /data/ziz/not-backed-up/scratch/score-sde/data/
 

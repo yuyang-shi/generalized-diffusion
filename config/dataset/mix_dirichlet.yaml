@@ -1,0 +1,10 @@
+_target_: score_sde.datasets.simplex.DirichletMixture
+_convert_: partial
+scale_type: gamma_a
+scale: 3
+K: 4
+batch_dims:
+  - ${batch_size}
+dim: 3
+seed: ${seed}
+name: mix_dirichlet

@@ -28,6 +28,7 @@ from score_sde.utils import batch_mul
 from score_sde.models import get_score_fn, PushForward, SDEPushForward
 from score_sde.utils import ParametrisedScoreFunction, TrainState
 from score_sde.models import div_noise, get_div_fn
+from score_sde.utils import get_exact_jac_fn
 
 
 def get_dsm_loss_fn(
@@ -73,7 +74,7 @@ def get_dsm_loss_fn(
             losses = jnp.square(batch_mul(score, std) + z)
             # losses = std^2 * DSM(x_t, x_0)
             losses = reduce_op(losses.reshape((losses.shape[0], -1)), axis=-1)
-        else:
+        else:  # maximum likelihood training
             g2 = sde.coefficients(jnp.zeros_like(x_0), t)[1] ** 2
             # losses = DSM(x_t, x_0)
             losses = jnp.square(score + batch_mul(z, 1.0 / std))
@@ -89,6 +90,7 @@ def get_ism_loss_fn(
     pushforward: SDEPushForward,
     model: ParametrisedScoreFunction,
     train: bool,
+    reduce_mean: bool = True,
     like_w: bool = True,
     hutchinson_type="Rademacher",
     eps: float = 1e-3,
@@ -106,21 +108,21 @@ def get_ism_loss_fn(
             train=train,
             return_state=True,
         )
-        x_0 = batch["data"]
+        x_0, context = pushforward.transform.inv(batch["data"]), batch["context"]
 
         rng, step_rng = random.split(rng)
         t = random.uniform(step_rng, (x_0.shape[0],), minval=sde.t0 + eps, maxval=sde.tf)
 
         rng, step_rng = random.split(rng)
         x_t = sde.marginal_sample(step_rng, x_0, t)
-        score, new_model_state = score_fn(x_t, t, rng=step_rng)
+        score, new_model_state = score_fn(x_t, t, context, rng=step_rng)
 
         # ISM loss
         rng, step_rng = random.split(rng)
         epsilon = div_noise(step_rng, x_0.shape, hutchinson_type)
-        drift_fn = lambda x, t: score_fn(x, t, rng=step_rng)[0]
+        drift_fn = lambda x, t, context: score_fn(x, t, context, rng=step_rng)[0]
         div_fn = get_div_fn(drift_fn, hutchinson_type)
-        div_score = div_fn(x_t, t, epsilon)
+        div_score = div_fn(x_t, t, context, epsilon)
         sq_norm_score = jnp.power(score, 2).sum(axis=-1)
         losses = 0.5 * sq_norm_score + div_score
 
@@ -128,7 +130,97 @@ def get_ism_loss_fn(
             g2 = sde.coefficients(jnp.zeros_like(x_0), t)[1] ** 2
             losses = losses * g2
 
+        assert len(losses.shape) == 1
         loss = jnp.mean(losses)
+        
+        if reduce_mean:
+            loss = loss / x_0.shape[-1]
+     
+        return loss, new_model_state
+
+    return loss_fn
+
+
+def get_ism_simplex_loss_fn(
+    pushforward: SDEPushForward,
+    model: ParametrisedScoreFunction,
+    train: bool,
+    reduce_mean: bool = True,
+    like_w: bool = True,
+    hutchinson_type="Rademacher",
+    eps: float = 1e-3,
+    fast_sampling=True, 
+):
+    sde = pushforward.sde
+    if hutchinson_type == "None":
+        print("Using exact jacobian")
+    else:
+        print("Using Gaussian noise for estimating divergence")
+
+    def loss_fn(
+        rng: jax.random.KeyArray, params: dict, states: dict, batch: dict
+    ) -> Tuple[float, dict]:
+        score_fn_raw = get_score_fn(
+            sde,
+            model,
+            params,
+            states,
+            train=train,
+            return_state=True,
+            std_trick=False
+        )
+        if sde.inv_scale:
+            def score_fn(x, t, context, rng):
+                score_raw, new_model_state = score_fn_raw(x, t, context, rng=rng)
+                return score_raw / x, new_model_state
+                # return (sde.alpha - 1 - score_raw) / x, new_model_state
+        else:
+            score_fn = score_fn_raw
+        x_0, context = pushforward.transform.inv(batch["data"]), batch["context"]
+
+        rng, step_rng = random.split(rng)
+        t = random.uniform(step_rng, (x_0.shape[0],), minval=sde.t0 + eps, maxval=sde.tf)
+
+        rng, step_rng = random.split(rng)
+        x_t = sde.marginal_sample(step_rng, x_0, t, fast_sampling=fast_sampling)
+        score, new_model_state = score_fn(x_t, t, context, rng=step_rng)
+        D = x_t.shape[-1]
+
+        # ISM loss
+        rng, step_rng = random.split(rng)
+        drift_fn = lambda x, t, context: score_fn(x, t, context, rng=step_rng)[0]
+
+        if hutchinson_type == "None":
+            jac_fn = get_exact_jac_fn(drift_fn)
+            jac_score = jac_fn(x_t, t, context)
+            outer_score = jnp.expand_dims(score, axis=-1) * jnp.expand_dims(score, axis=-2)
+            losses = (((jnp.eye(D) - jnp.expand_dims(x_t, axis=-2)) * (jac_score + 0.5 * outer_score)).sum(axis=-1) * x_t).sum(axis=-1)
+            losses = losses + ((1 - D*x_t) * score).sum(axis=-1)
+
+        elif hutchinson_type == "Gaussian":
+            wf_cov_decomp = sde.wf_cov_decomp(x_t)
+            rng, step_rng = random.split(rng)
+            epsilon = jnp.einsum("...ij,...j->...i", wf_cov_decomp, jax.random.normal(step_rng, x_0.shape))
+            div_fn = get_div_fn(drift_fn, "Gaussian")
+            div_score = div_fn(x_t, t, context, epsilon)
+
+            losses = div_score + 0.5 * (jnp.sum(x_t * score**2, axis=-1) - jnp.sum(x_t * score, axis=-1)**2) + jnp.sum((1 - D*x_t) * score, axis=-1)
+        
+        else:
+            raise NotImplementedError
+
+        losses = losses - D * (D-1) / 2 + jnp.sum(sde.alpha) * (D-1) / 2
+
+        if like_w:
+            g2 = sde.beta_t(t)
+            losses = losses * g2
+
+        assert len(losses.shape) == 1
+        loss = jnp.mean(losses)
+
+        if reduce_mean:
+            loss = loss / D
+        
         return loss, new_model_state
 
     return loss_fn
@@ -165,11 +257,6 @@ def get_ema_loss_step_fn(
     Args:
       loss_fn: loss function to compute
       train: `True` for training and `False` for evaluation.
-      optimize_fn: An optimization function.
-      reduce_mean: If `True`, average the loss across data dimensions. Otherwise sum the loss across data dimensions.
-      continuous: `True` indicates that the model is defined to take continuous time steps.
-      like_w: If `True`, weight the mixture of score matching losses according to
-        https://arxiv.org/abs/2101.09258; otherwise use the weighting recommended by our paper.
 
     Returns:
       A one-step function for training or evaluation.

@@ -1,0 +1,40 @@
+# @package _global_
+
+name: simplex_softmax
+
+defaults:
+  - /dataset: mix_dirichlet
+  - /flow: vpsde
+  - /base: normal
+  - /pushf: sde
+  - /loss: dsm
+  - /architecture: concat
+  - /transform: softmax
+
+data_dir: /data/ziz/not-backed-up/scratch/score-sde/data/
+
+dataset:
+  transform: exp_log_softmax
+
+architecture:
+  output_shape: ${dataset.dim}
+
+flow:
+  t0: 0
+  tf: 1
+  beta_0: 0.001
+  beta_f: 6
+
+splits: [0.8, 0.1, 0.1]
+batch_size: 128
+warmup_steps: 100
+steps: 100000
+val_freq: 10000
+ema_rate: 0.999
+eps: 2e-4
+
+train_val: false
+test_val: false
+test_test: false
+
+sampler_N: 1000

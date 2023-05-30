@@ -92,7 +92,7 @@ class PushForward:
     Generative model: z -> y -> x \in M
     """
 
-    def __init__(self, flow, base, transform=Id):
+    def __init__(self, flow, base, transform=Id(None)):
         self.flow = flow  # NOTE: Convention is that flow: data -> base
         self.base = base
         self.transform = transform
@@ -103,8 +103,8 @@ class PushForward:
     def get_log_prob(self, model_w_dicts, train=False, transform=True, **kwargs):
         def log_prob(x, context=None, rng=None):
             y = self.transform.inv(x) if transform else x
-            flow = self.flow.get_forward(model_w_dicts, train, augmented=True)
-            z, inv_logdets, nfe = flow(y, context=context, rng=rng, **kwargs)  # NOTE: flow is not reversed
+            flow = self.flow.get_forward(model_w_dicts, train, augmented=True, **kwargs)
+            z, inv_logdets, nfe = flow(y, context=context, rng=rng)  # NOTE: flow is not reversed
             log_prob = self.base.log_prob(z).reshape(-1)
             log_prob += inv_logdets
             if transform:
@@ -118,8 +118,8 @@ class PushForward:
     ):
         def sample(rng, shape, context, z=None):
             z = self.base.sample(rng, shape) if z is None else z
-            flow = self.flow.get_forward(model_w_dicts, train)
-            y, nfe = flow(z, context=context, reverse=reverse, **kwargs)  # NOTE: flow is reversed
+            flow = self.flow.get_forward(model_w_dicts, train, **kwargs)
+            y, nfe = flow(z, context=context, reverse=reverse)  # NOTE: flow is reversed
             x = self.transform(y) if transform else y
             return x
 
@@ -127,7 +127,7 @@ class PushForward:
 
 
 class SDEPushForward(PushForward):
-    def __init__(self, flow, base, diffeq="sde", transform=Id):
+    def __init__(self, flow, base, diffeq="sde", transform=Id(None), predictor=None, corrector=None):
         self.sde = flow
         self.diffeq = diffeq
         flow = CNF(
@@ -135,6 +135,8 @@ class SDEPushForward(PushForward):
             tf=self.sde.tf,
             get_drift_fn=partial(get_sde_drift_from_fn, self.sde),
         )
+        self.predictor = predictor
+        self.corrector = corrector
         super(SDEPushForward, self).__init__(flow, base, transform)
 
     def get_sampler(
@@ -142,7 +144,7 @@ class SDEPushForward(PushForward):
     ):
         if self.diffeq == "ode":  # via probability flow
             print("Using probability flow sampling")
-            sample = super().get_sampler(model_w_dicts, train, reverse)
+            sample = super().get_sampler(model_w_dicts, train, reverse, **kwargs)
         elif self.diffeq == "sde":  # via stochastic process
             print("Using stochastic process sampling")
             def sample(rng, shape, context, z=None):
@@ -150,6 +152,10 @@ class SDEPushForward(PushForward):
                 score_fn = get_score_fn(self.sde, *model_w_dicts)
                 score_fn = partial(score_fn, context=context)
                 sde = self.sde.reverse(score_fn) if reverse else self.sde
+                if self.predictor is not None:
+                    kwargs["predictor"] = self.predictor
+                if self.corrector is not None:
+                    kwargs["corrector"] = self.corrector
                 sampler = get_pc_sampler(sde, **kwargs)
                 # sampler = jax.jit(sampler)  # TODO: 
                 y = sampler(rng, z)
@@ -167,7 +173,7 @@ class SDEPushForward(PushForward):
 class MoserFlow(PushForward):
     """Following https://github.com/noamroze/moser_flow/blob/main/moser.py#L36"""
 
-    def __init__(self, flow, base, eps=1e-5, diffeq=True, transform=Id):
+    def __init__(self, flow, base, eps=1e-5, diffeq=True, transform=Id(None)):
         self.eps = eps
         self.diffeq = diffeq
         flow.get_drift_fn = partial(get_moser_drift_fn, base, self.eps)

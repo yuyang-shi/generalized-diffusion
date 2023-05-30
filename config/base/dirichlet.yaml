@@ -1,0 +1,3 @@
+_target_: score_sde.sde.DirichletDistribution
+alpha: ${flow.alpha}
+dim: ${dataset.dim}

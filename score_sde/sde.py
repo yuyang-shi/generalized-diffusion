@@ -3,12 +3,13 @@ Abstract SDE classes, Reverse SDE, and VE/VP SDEs.
 Modified code from https://github.com/yang-song/score_sde
 """
 from abc import ABC, abstractmethod
+from functools import partial
 
 import jax
 import numpy as np
 import jax.numpy as jnp
 
-from score_sde.models.distribution import NormalDistribution
+from score_sde.models.distribution import NormalDistribution, DirichletDistribution
 
 
 class SDE(ABC):
@@ -144,8 +145,9 @@ class ProbabilityFlowODE:
             )
         elif score_fn is not None:
             self.score_fn = score_fn
-        elif isinstance(sde, RSDE):
+        if isinstance(sde, RSDE):
             self.score_fn = sde.score_fn
+            self.sde = sde.reverse()
 
     def coefficients(self, x, t, z=None):
         drift, diffusion = self.sde.coefficients(x, t)
@@ -275,3 +277,102 @@ class subVPSDE(SDE):
 
 class VESDE(SDE):
     pass
+
+
+class RSDE_Simplex(RSDE):
+    """Reverse time SDE, assuming the drift coefficient is spatially homogenous"""
+
+    def __init__(self, sde: SDE, score_fn):
+        super().__init__(sde, score_fn)
+
+        self.dim = self.sde.dim
+        self.eps = self.sde.eps
+        self.inv_scale = self.sde.inv_scale
+
+    def coefficients(self, x, t):
+        _, diffusion = self.sde.coefficients(x, t)
+        score_fn = self.score_fn(x, t)
+        if self.inv_scale:
+            score_fn = score_fn / x
+
+        beta_t = self.sde.beta_t(t)
+        R = 0.5 * jnp.expand_dims(self.sde.alpha, 0) + jnp.expand_dims(x, -2) / jnp.expand_dims(x, -1) * (jnp.expand_dims(self.sde.alpha, 1) - 1) - \
+            jnp.expand_dims(x, -2) * jnp.expand_dims(score_fn, -1)
+        # R = 0.5 * jnp.expand_dims(self.sde.alpha, 0) + jnp.expand_dims(x, -2) * jnp.expand_dims(score_fn, -1)
+
+        # Make R rowsum to 0
+        R = R * (1 - jnp.eye(self.dim))
+        R = R - R.sum(-1, keepdims=True) * jnp.eye(self.dim)
+        reverse_drift = beta_t[..., None] * (jnp.expand_dims(x, 1) @ R)[:, 0]
+
+        return - reverse_drift, diffusion
+
+    def reverse(self):
+        return self.sde
+
+
+class WrightFisher(SDE):
+    def __init__(self, alpha, dim, tf: float, t0: float = 0, beta_0=0.1, beta_f=20, N=100, eps=1e-5, inv_scale=False):
+        """Construct a Wright-Fisher diffusion on the simplex"""
+        super().__init__(tf, t0)
+        self.alpha = jnp.ones([dim]) * alpha
+        self.dim = dim
+        self.beta_0 = beta_0
+        self.beta_f = beta_f
+        self.limiting = DirichletDistribution(alpha, dim)
+        self.N = N
+        self.eps = eps
+        self.inv_scale = inv_scale
+
+    def beta_t(self, t):
+        normed_t = (t - self.t0) / (self.tf - self.t0)
+        return self.beta_0 + normed_t * (self.beta_f - self.beta_0)
+
+    def rescale_t(self, t):
+        return 0.5 * t**2 * (self.beta_f - self.beta_0) + t * self.beta_0
+
+    def coefficients(self, x, t):
+        beta_t = self.beta_t(t)
+        Q = 0.5 * jnp.expand_dims(self.alpha, 0) * (1 - jnp.eye(self.dim))
+        Q = Q - jnp.diag(Q.sum(1))
+        drift = beta_t[..., None] * (x @ Q)
+
+        diffusion = jnp.sqrt(beta_t)[..., None, None] * self.wf_cov_decomp(x)
+
+        return drift, diffusion
+
+    @staticmethod
+    def wf_cov_decomp(x):
+        sqrt_x = jnp.sqrt(x)
+        diag_sqrt_x = jnp.expand_dims(sqrt_x, -1) * jnp.eye(x.shape[-1])
+        coef = - 1
+        outer = jnp.einsum("...i,...j->...ij", x, sqrt_x)
+        return diag_sqrt_x + coef * outer
+
+    def marginal_sample(self, rng, x, t, return_hist=False, fast_sampling=True):
+        if return_hist or (not fast_sampling):
+            out = None
+        else:
+            from score_sde.models.simplex_diffusion import Wright_Fisher_K_dim_transition_with_t_small_approx
+            out = Wright_Fisher_K_dim_transition_with_t_small_approx(rng, x, self.rescale_t(t), jnp.ones_like(x) * self.alpha)
+        if out is None:
+            from score_sde.sampling import get_pc_sampler
+            sampler = get_pc_sampler(
+                self,
+                self.N,
+                predictor="EulerMaruyamaSimplexPredictor",
+                return_hist=return_hist,
+            )
+            out = sampler(rng, x, tf=t)
+        return out
+
+    def sample_limiting_distribution(self, rng, shape):
+        assert shape[-1] == self.dim
+        return self.limiting.sample(rng, shape)
+
+    def limiting_distribution_logp(self, z):
+        return self.limiting.log_prob(z)
+
+    def reverse(self, score_fn):
+        return RSDE_Simplex(self, score_fn)
+

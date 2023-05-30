@@ -100,12 +100,13 @@ class Wrapped:
 
         if scale_type == "random":
             precision = jax.random.gamma(key=next_rng, a=scale, shape=(K,))
+            scale = 1 / jnp.sqrt(precision)
         elif scale_type == "fixed":
-            precision = jnp.ones((K,)) * (1 / scale**2)
+            scale = jnp.ones((K,)) * scale
         else:
             raise ValueError(f"Scale value: {scale}")
         axis_to_expand = tuple(range(-1, -len(self.mean.shape), -1))
-        self.precision = jnp.expand_dims(precision, axis_to_expand)
+        self.scale = jnp.expand_dims(scale, axis_to_expand)
 
     def __iter__(self):
         return self
@@ -117,7 +118,7 @@ class Wrapped:
         self.rng = rng
         _, k = gs.random.choice(state=next_rng, a=ks, n=n_samples)
         mean = self.mean[k]
-        scale = 1 / jnp.sqrt(self.precision[k])
+        scale = self.scale[k]
         tangent_vec = self.manifold.random_normal_tangent(
             state=next_rng, base_point=mean, n_samples=n_samples
         )[1]
@@ -133,7 +134,7 @@ class Wrapped:
         rng, next_rng = jax.random.split(self.rng)
         self.rng = rng
         mean = self.mean[k]
-        scale = 1 / jnp.sqrt(self.precision[k])
+        scale = self.scale[k]
         tangent_vec = self.manifold.random_normal_tangent(
             state=next_rng, base_point=mean, n_samples=n_samples
         )[1]
@@ -142,13 +143,13 @@ class Wrapped:
         return samples
 
     def log_prob(self, samples):
-        def single_log_prob(samples, mean, precision):
+        def single_log_prob(samples, mean, scale):
             pos = self.manifold.log(samples, mean)
-            ll = normal_pdf(pos, scale=1 / jnp.sqrt(precision))
+            ll = normal_pdf(pos, scale=scale)
             return ll.prod(axis=-1)
 
         ll = jax.vmap(single_log_prob, (None, 0, 0), (0))(
-            samples, self.mean, self.precision
+            samples, self.mean, self.scale
         )
         return ll.mean(axis=0)
 

@@ -7,6 +7,7 @@ def main(cfg):
     os.environ['GEOMSTATS_BACKEND'] = 'jax'
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     os.environ["WANDB_START_METHOD"] = "thread"
+    os.environ["JAX_ENABLE_X64"] = str(cfg.jax_enable_x64)
 
     from run_score_sde import run
 

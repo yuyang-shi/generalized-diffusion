@@ -1,0 +1,10 @@
+_target_: score_sde.sde.WrightFisher
+alpha: 2
+dim: ${dataset.dim}
+beta_0: 0.1
+beta_f: 20.
+t0: 0.
+tf: 1.
+inv_scale: true  # Whether or not to rescale the score function by 1/x
+N: 1000  # Number of N for sampling the forward process
+eps: 1e-5  # Minimum prob enforced in sampler

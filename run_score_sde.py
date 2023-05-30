@@ -25,10 +25,10 @@ log = logging.getLogger(__name__)
 
 def run(cfg):
     def train(train_state):
-        loss = instantiate(
+        loss_fn = instantiate(
             cfg.loss, pushforward=pushforward, model=model, eps=cfg.eps, train=True
         )
-        train_step_fn = get_ema_loss_step_fn(loss, optimizer=optimiser, train=True)
+        train_step_fn = get_ema_loss_step_fn(loss_fn, optimizer=optimiser, train=True)
         train_step_fn = jax.jit(train_step_fn)
 
         rng = train_state.rng
@@ -53,7 +53,10 @@ def run(cfg):
                 logger.log_metrics({"train/loss": loss}, step)
                 t.set_description(f"Loss: {loss:.3f}")
 
-            if step > 0 and step % cfg.val_freq == 0:
+            if step == 0:
+                if cfg.train_plot:
+                    generate_plots(train_state, "val", step=step, forward_only=True)
+            elif (step + 1) % cfg.val_freq == 0:
                 logger.log_metrics(
                     {"train/time_per_it": (timer() - train_time) / cfg.val_freq}, step
                 )
@@ -77,73 +80,102 @@ def run(cfg):
         log.info("Running evaluation")
         dataset = eval_ds if stage == "val" else test_ds
 
+        loss_fn = instantiate(
+            cfg.loss, pushforward=pushforward, model=model, eps=cfg.eps, train=False
+        )
+        eval_step_fn = get_ema_loss_step_fn(loss_fn, optimizer=None, train=False)
+        eval_step_fn = jax.jit(eval_step_fn)
+
         model_w_dicts = (model, train_state.params_ema, train_state.model_state)
         likelihood_fn = pushforward.get_log_prob(model_w_dicts, train=False)
 
-        logp, nfe, N = 0.0, 0.0, 0
+        loss, logp, nfe, N = 0.0, 0.0, 0.0, 0
+        rng = train_state.rng
 
         if hasattr(dataset, "__len__"):
             for batch in dataset:
-                logp_step, nfe_step = likelihood_fn(*batch)
-                logp += logp_step.sum()
-                nfe += nfe_step
-                N += logp_step.shape[0]
+                rng, next_rng = jax.random.split(rng)
+                _, loss_step = eval_step_fn((next_rng, train_state), {"data": batch[0], "context": batch[1]})
+                loss += loss_step * batch[0].shape[0]
+                if cfg.test_ode:
+                    logp_step, nfe_step = likelihood_fn(*batch)
+                    logp += logp_step.sum()
+                    nfe += nfe_step
+                N += batch[0].shape[0]
         else:
             dataset.batch_dims = [cfg.eval_batch_size]
             samples = round(cfg.eval_num_data / cfg.eval_batch_size)
             for i in range(samples):
                 batch = next(dataset)
-                logp_step, nfe_step = likelihood_fn(*batch)
-                logp += logp_step.sum()
-                nfe += nfe_step
-                N += logp_step.shape[0]
-            dataset.batch_dims = [cfg.batch_size]
-        logp /= N
-        nfe /= len(dataset) if hasattr(dataset, "__len__") else samples
+                rng, next_rng = jax.random.split(rng)
+                _, loss_step = eval_step_fn((next_rng, train_state), {"data": batch[0], "context": batch[1]})
+                loss += loss_step * cfg.eval_batch_size
+                if cfg.test_ode:
+                    logp_step, nfe_step = likelihood_fn(*batch)
+                    logp += logp_step.sum()
+                    nfe += nfe_step
+                N += batch[0].shape[0]
+            dataset.batch_dims = cfg.dataset.batch_dims
 
-        logger.log_metrics({f"{stage}/logp": logp}, step)
-        log.info(f"{stage}/logp = {logp:.3f}")
-        logger.log_metrics({f"{stage}/nfe": nfe}, step)
-        log.info(f"{stage}/nfe = {nfe:.1f}")
+        loss /= N
+        logger.log_metrics({f"{stage}/loss": loss}, step)
+        log.info(f"{stage}/loss = {loss:.3f}")
+
+        if cfg.test_ode:
+            logp /= N
+            nfe /= len(dataset) if hasattr(dataset, "__len__") else samples
+
+            logger.log_metrics({f"{stage}/logp": logp}, step)
+            log.info(f"{stage}/logp = {logp:.3f}")
+            logger.log_metrics({f"{stage}/nfe": nfe}, step)
+            log.info(f"{stage}/nfe = {nfe:.1f}")
+        logger.save()
 
 
-    def generate_plots(train_state, stage, step=None):
+    def generate_plots(train_state, stage, step=None, forward_only=False):
         log.info("Generating plots")
         rng = jax.random.PRNGKey(cfg.seed)
         dataset = eval_ds if stage == "val" else test_ds
 
-        ## p_0 (backward)
-        M = cfg.plot_M
         model_w_dicts = (model, train_state.params_ema, train_state.model_state)
-        sampler_kwargs = dict(N=cfg.sampler_N, eps=cfg.eps)
-        sampler = pushforward.get_sampler(model_w_dicts, train=False, **sampler_kwargs)
+        sampler_kwargs = dict(N=cfg.sampler_N, eps=cfg.eps, std_trick=cfg.get('std_trick', True))
 
+        M = cfg.plot_M
         x0, context = next(dataset)
         shape = (int(x0.shape[0] * M), *transform.inv(x0).shape[1:])
-        x0 = jnp.repeat(x0, M, 0)
         if context is not None:
+            x0 = jnp.repeat(x0, M, 0)
             context = jnp.repeat(context, M, 0)
-        rng, next_rng = jax.random.split(rng)
-        x = sampler(next_rng, shape, context)
-        plt, metrics_dict = plot([x0], [x], dataset=dataset)
-        logger.log_plot(f"{stage}_x0_backw", plt, step if step is not None else cfg.steps)
+        else:
+            for _ in range(M - 1):
+                x0 = jnp.concatenate([x0, next(dataset)[0]])
+        
+        if not forward_only:
+            ## p_0 (backward)
+            sampler = pushforward.get_sampler(model_w_dicts, train=False, **sampler_kwargs)
+            rng, next_rng = jax.random.split(rng)
+            x = sampler(next_rng, shape, context)
+            plt, metrics_dict = plot([x0], [x], dataset=dataset)
+            logger.log_plot(f"{stage}_x0_backw", plt, step if step is not None else cfg.steps)
 
-        for metrics_dict_k, metrics_dict_v in metrics_dict.items():
-            logger.log_metrics({f"{stage}/{metrics_dict_k}": metrics_dict_v}, step)
+            for metrics_dict_k, metrics_dict_v in metrics_dict.items():
+                logger.log_metrics({f"{stage}/{metrics_dict_k}": metrics_dict_v}, step)
 
         ## p_T (forward)
         if isinstance(pushforward, SDEPushForward):
             sampler = pushforward.get_sampler(
-                model_w_dicts, train=False, reverse=False, **sampler_kwargs
+                model_w_dicts, train=False, reverse=False, transform=False, **sampler_kwargs
             )
             z = transform.inv(x0)
-            zT = sampler(rng, None, context, z=z)
-            plt, metrics_dict = plot_ref(transform.inv(zT))
+            rng, next_rng = jax.random.split(rng)
+            zT = sampler(next_rng, None, context, z=z)
+            plt, metrics_dict = plot_ref(zT, base=base)
             if plt is not None:
                 logger.log_plot(f"{stage}_xT", plt, step if step is not None else cfg.steps)
             
             for metrics_dict_k, metrics_dict_v in metrics_dict.items():
                 logger.log_metrics({f"{stage}/{metrics_dict_k}": metrics_dict_v}, step)
+        logger.save()
 
     ### Main
     log.info("Stage : Startup")
@@ -184,11 +216,7 @@ def run(cfg):
             f"Train size: {len(train_ds.dataset)}. Val size: {len(eval_ds.dataset)}. Test size: {len(test_ds.dataset)}"
         )
     else:
-        train_ds = instantiate(cfg.dataset, rng=next_rng, split="train")
-        rng, next_rng = jax.random.split(rng)
-        eval_ds = instantiate(cfg.dataset, rng=next_rng, split="val")
-        rng, next_rng = jax.random.split(rng)
-        test_ds = instantiate(cfg.dataset, rng=next_rng, split="test")
+        train_ds, eval_ds, test_ds = dataset, dataset, dataset
 
     log.info("Stage : Instantiate vector field model")
 
